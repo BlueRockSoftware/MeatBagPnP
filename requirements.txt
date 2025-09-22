@@ -1,0 +1,18 @@
+# MeatBagPnP Python 3 Requirements
+# Pick and Place assistance tool for manual PCB assembly
+
+# Primary GUI framework - PySide6 is preferred for Python 3.8+
+PySide6>=6.0.0
+
+# Web engine for barcode lookup functionality
+# (included with PySide6, but listed for clarity)
+
+# Alternative GUI framework if PySide6 is not available
+# Uncomment the line below if you need to use PySide2 instead
+# PySide2>=5.15.0
+
+# Built-in modules (no installation required):
+# - csv (CSV file handling)
+# - sys (system functions)
+# - argparse (command line argument parsing)
+# - urllib.request (web requests for barcode lookup)

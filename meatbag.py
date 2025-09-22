@@ -1,34 +1,26 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import csv
 import sys
 import argparse
+from urllib.request import urlopen
 
-# a little footwork to abstract away python2/PySide
-# vs python3/PySide2 changes:
-#  - try/except to attempt and make process transparent
-#  - some import Foo as Bar to mask some differences
-# Only tested, to date, with python3 as that's what I
-# gotz.
+# Modern Python 3 imports for Qt
 try:
-    from PySide import QtGui, QtCore, QtWebKit
-    from PySide import QtGui as Widgets 
-    from QtWebKit import QWebView as WebView
-    from urllib import urlopen
-except Exception as py2Ex:
+    from PySide6 import QtGui, QtCore, QtWidgets
+    from PySide6.QtWebEngineWidgets import QWebEngineView as WebView
+    from PySide6 import QtWidgets as Widgets
+except ImportError:
     try:
         from PySide2 import QtGui, QtCore, QtWidgets
-        from PySide2 import QtWidgets as Widgets
         from PySide2.QtWebEngineWidgets import QWebEngineView as WebView
-        
-        
-        from urllib.request import urlopen
-    except Exception as py3Ex:
-        print("Python2(?) Exceptions: %s" % str(py2Ex))
-        print("Python3 Exceptions: %s" % str(py3Ex))
-        raise py3Ex
-    
-        
-from sgmllib import SGMLParser
+        from PySide2 import QtWidgets as Widgets
+    except ImportError as ex:
+        print(f"Failed to import PySide6 or PySide2: {ex}")
+        print("Please install PySide6 or PySide2: pip install PySide6")
+        sys.exit(1)
+
+# Note: sgmllib was removed in Python 3, but it's not actually used in this code
+# If HTML parsing is needed, use html.parser or BeautifulSoup instead
 
 
 class PCBPainter(Widgets.QDialog):
@@ -98,7 +90,7 @@ class PCBPainter(Widgets.QDialog):
             scale_x = float(self.base.width()) / float(boardwidth)
             scale_y = float(self.base.height()) / float(boardheight)
         except ZeroDivisionError:
-            Widgets.QMessageBox.warning("Division by Zero", "Division by zero - did you set board height & width in image?")
+            Widgets.QMessageBox.warning(self, "Division by Zero", "Division by zero - did you set board height & width in image?")
             raise
 
         x = x * scale_x
@@ -110,7 +102,7 @@ class PCBPainter(Widgets.QDialog):
         if mirror:
             x = self.base.width() - x
         
-        #print("Drawing marker at %d, %d" % (x,y))
+        #print(f"Drawing marker at {x}, {y}")
         center = QtCore.QPoint(x, y)
         
         painter = QtGui.QPainter()
@@ -244,7 +236,7 @@ class MeatBagWindow(Widgets.QMainWindow):
         self.initLayout()
         self.initMenus()
         if csvSettings:
-            self.csv_settings = csvSettings;
+            self.csv_settings = csvSettings
         else:
             self.csv_settings = MeatBagCSVSettingsAltium()
 
@@ -372,9 +364,10 @@ class MeatBagWindow(Widgets.QMainWindow):
         self.setCentralWidget(window)
 
     def initMenus(self):
-        self.openAct = Widgets.QAction("&Open...", self,
-                shortcut=QtGui.QKeySequence.Open,
-                statusTip="Open an existing file", triggered=self.openFile)
+        self.openAct = QtGui.QAction("&Open...", self)
+        self.openAct.setShortcut(QtGui.QKeySequence.Open)
+        self.openAct.setStatusTip("Open an existing file")
+        self.openAct.triggered.connect(self.openFile)
 
         self.fileMenu = self.menuBar().addMenu("&File")
         self.fileMenu.addAction(self.openAct)
@@ -391,7 +384,7 @@ class MeatBagWindow(Widgets.QMainWindow):
         elif tb.lower().startswith("bot"):
             return False
         else:
-            raise ValueError("Unknown layer for row %d: '%s' in col %d" % (row, tb.lower(), self.csv_settings.col_layer))
+            raise ValueError(f"Unknown layer for row {row}: '{tb.lower()}' in col {self.csv_settings.col_layer}")
 
     def sideSelectionChanged(self, indx):
         """User changed build side"""
@@ -428,7 +421,7 @@ class MeatBagWindow(Widgets.QMainWindow):
             ppfile = csv.reader(csvfile, delimiter=',', quotechar='"')
             for row in ppfile:
                 if len(row) < 4:
-                    print("Skipped line: " +  ' '.join(row))
+                    print(f"Skipped line: {' '.join(row)}")
                 else:
                     ppdata.append(row)
 
@@ -560,45 +553,48 @@ class MeatBagWindow(Widgets.QMainWindow):
 
                 print("Old-style barcode, attempting lookup")
                 sock = urlopen(
-                    'https://www.digikey.com/product-detail/en/keystone-electronics/4245C/36-4245C-ND/' + internal_pn)
-                data = sock.read()
+                    f'https://www.digikey.com/product-detail/en/keystone-electronics/4245C/36-4245C-ND/{internal_pn}')
+                data = sock.read().decode('utf-8')
                 raise NotImplementedError("Old-style barcode not implemented")
 
                 #TODO: If you need to fix this, hack around following code to get actual PN not supplier one
                 # data = data.split(" ")
                 digikey_pn = data.split('content="sku:')[1].split("-ND")[0] + "-ND"
-                # print "%s: %d"%(digikey_pn, qty)
+                # print(f"{digikey_pn}: {qty}")
         else:
             # MOUSER???
             print("Maybe Mouser? Trying lookup - WAITING FOR WEBPAGE NOW")
             #Use webview as need JS
-            self.webView.load(QtCore.QUrl('https://ca.mouser.com/search/ProductDetail.aspx?R=' + scan))
+            self.webView.load(QtCore.QUrl(f'https://ca.mouser.com/search/ProductDetail.aspx?R={scan}'))
 
     def lookupdone(self, _=None):
         """Called when website loaded"""
-        html = self.webView.page().mainFrame().toHtml()
-
-        #Decode website type - try mouser first
-        try:
-            pn = html.split('<div id="divManufacturerPartNum">')[1].split("</div>")[0]
-            pn = pn.split('<h1>')[1].split('</h1>')[0]
-            print ("Found PN: " + pn)
-            self.process_new_pn(pn)
-        except IndexError:
-            print ("Failed to find PN in returned site.")
+        # Note: QWebEngineView doesn't have mainFrame().toHtml() like the old QtWebKit
+        # This needs to be rewritten using the async toHtml() method
+        def handle_html(html):
+            #Decode website type - try mouser first
+            try:
+                pn = html.split('<div id="divManufacturerPartNum">')[1].split("</div>")[0]
+                pn = pn.split('<h1>')[1].split('</h1>')[0]
+                print(f"Found PN: {pn}")
+                self.process_new_pn(pn)
+            except IndexError:
+                print("Failed to find PN in returned site.")
+        
+        # Use the async method for getting HTML content
+        self.webView.page().toHtml(handle_html)
 
     def process_new_com(self, com, update_placement=True):
         """Given a Comment, find all likely matches"""
         matchlist = []
 
-        #Shitty match for shitty programs
+        #Simple matching algorithm
         
-
         for i in range(0, len(self.pdc)):
-            #print "checking"
+            #print("checking")
             if (len(self.pdc[i]) > 3 and self.pdc[i] in com) or com in self.pdc[i]:
                 matchlist.append(i)
-        #print matchlist
+        #print(matchlist)
 
         self.topDesList = []
         self.botDesList = []
@@ -621,10 +617,10 @@ class MeatBagWindow(Widgets.QMainWindow):
 
 
     def process_new_pn(self, pn, update_placement=True):
-        """Given a manufactures PN, find all likely matches"""
+        """Given a manufacturer's PN, find all likely matches"""
         matchlist = []
 
-        #Shitty match for shitty programs
+        #Simple matching algorithm
         for i in range(0, len(self.pdb)):
             if (len(self.pdb[i]) > 4 and self.pdb[i] in pn) or pn in self.pdb[i]:
                 matchlist.append(i)
@@ -711,7 +707,7 @@ class MeatBagWindow(Widgets.QMainWindow):
 
             self.pcbpainter.xy_to_draw(float(self.table.item(self.cur_placement, self.csv_settings.col_x).text()),
                                        float(self.table.item(self.cur_placement, self.csv_settings.col_y).text()),
-                                       self.isTopLayer(self.cur_placement) == False)
+                                       not self.isTopLayer(self.cur_placement))
 
         else:
             if len(self.topDesList) == 0 and len(self.botDesList) == 0:
@@ -726,7 +722,6 @@ class MeatBagWindow(Widgets.QMainWindow):
     def scanline_changed_dly(self):
         self.process_new_scan(self.scanLine.toPlainText())
         self.scanLine.clearFocus()
-
 
 
 class filterObj(QtCore.QObject):
@@ -744,8 +739,6 @@ class filterObj(QtCore.QObject):
             return False
 
 
-
-        
 def main():
     parser = argparse.ArgumentParser(description='MeatBagPnP')
     parser.add_argument('--csv', dest='csv',  help='CSV file to use')
@@ -755,10 +748,10 @@ def main():
     parser.add_argument('--image')
     args = parser.parse_args()
     csvSettingsAvailable = dict(
-        altium = MeatBagCSVSettingsAltium(),
-        eagle = MeatBagCSVSettingsAltium(), # same as altium for now
-        kicad = MeatBagCSVSettingsKicadMultiLayer(),
-        default = MeatBagCSVSettingsAltium()
+        altium=MeatBagCSVSettingsAltium(),
+        eagle=MeatBagCSVSettingsAltium(),  # same as altium for now
+        kicad=MeatBagCSVSettingsKicadMultiLayer(),
+        default=MeatBagCSVSettingsAltium()
     )
     csvSettings = csvSettingsAvailable['default']
     if args.format and args.format in csvSettingsAvailable:
@@ -768,7 +761,7 @@ def main():
     
     app = Widgets.QApplication(sys.argv)
     ex = MeatBagWindow(csvSettings, args)
-    app.exec_()
+    app.exec()
 
 
 if __name__ == '__main__':
