@@ -47,7 +47,7 @@ class PCBPainter(Widgets.QDialog):
         self.pcbheight.setMinimum(0)
         self.pcbheight.setMaximum(100000)
         self.pcbheight.valueChanged.connect(self.clearfocusdelay)
-        self.marker_diameter = 5
+        self.marker_diameter = 20  # Increased from 5 to 20 for better visibility
 
         buttongrid = Widgets.QHBoxLayout()
         buttongrid.addWidget(openpb)
@@ -62,6 +62,14 @@ class PCBPainter(Widgets.QDialog):
         vb.addLayout(buttongrid)
 
         self.setLayout(vb)
+        
+        # Set reasonable window size constraints for display
+        self.setMaximumSize(1000, 800)  # Reasonable maximum size
+        self.resize(800, 600)  # Initial size
+        
+        # Store original and display image separately
+        self.original_base = None  # Original image for coordinate calculations
+        self.display_scale = 1.0   # Scale factor for display
 
         self.image_path = ""
 
@@ -87,8 +95,9 @@ class PCBPainter(Widgets.QDialog):
         boardheight = self.pcbheight.value()
 
         try:
-            scale_x = float(self.base.width()) / float(boardwidth)
-            scale_y = float(self.base.height()) / float(boardheight)
+            # Use original image dimensions for accurate coordinate calculations
+            scale_x = float(self.original_base.width()) / float(boardwidth)
+            scale_y = float(self.original_base.height()) / float(boardheight)
         except ZeroDivisionError:
             Widgets.QMessageBox.warning(self, "Division by Zero", "Division by zero - did you set board height & width in image?")
             raise
@@ -97,25 +106,44 @@ class PCBPainter(Widgets.QDialog):
         y = y * scale_y
 
         #Y taken from wrong side normally
-        y = self.base.height() - y
+        y = self.original_base.height() - y
         
         if mirror:
-            x = self.base.width() - x
+            x = self.original_base.width() - x
         
-        #print(f"Drawing marker at {x}, {y}")
-        center = QtCore.QPoint(x, y)
+        print(f"Drawing marker at pixel coordinates: ({x:.1f}, {y:.1f})")
+        
+        # Convert to integer coordinates for pixel-perfect positioning
+        x_int = int(round(x))
+        y_int = int(round(y))
+        
+        # Calculate marker radius for centered drawing
+        radius = self.marker_diameter // 2
         
         painter = QtGui.QPainter()
         painter.begin(self.base)
-        painter.setBrush(QtCore.Qt.black)
-        painter.setOpacity(0.45)
-        painter.drawEllipse(QtCore.QPoint(x+(float(0.15*self.marker_diameter)), y+(float(0.15*self.marker_diameter))), self.marker_diameter, self.marker_diameter)
-        painter.end()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
         
-        painter.begin(self.base)
-        painter.setBrush(QtCore.Qt.red)
-        painter.setOpacity(0.95)
-        painter.drawEllipse(center, self.marker_diameter, self.marker_diameter)
+        # Draw shadow/outline (black circle, slightly larger)
+        painter.setBrush(QtGui.QBrush(QtCore.Qt.black))
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setOpacity(0.7)
+        shadow_rect = QtCore.QRect(x_int - radius - 2, y_int - radius - 2, 
+                                  self.marker_diameter + 4, self.marker_diameter + 4)
+        painter.drawEllipse(shadow_rect)
+        
+        # Draw main marker (bright red circle)
+        painter.setBrush(QtGui.QBrush(QtCore.Qt.red))
+        painter.setOpacity(1.0)
+        marker_rect = QtCore.QRect(x_int - radius, y_int - radius, 
+                                  self.marker_diameter, self.marker_diameter)
+        painter.drawEllipse(marker_rect)
+        
+        # Draw center crosshair for precise positioning
+        painter.setPen(QtGui.QPen(QtCore.Qt.white, 2))
+        painter.drawLine(x_int - radius//2, y_int, x_int + radius//2, y_int)  # Horizontal line
+        painter.drawLine(x_int, y_int - radius//2, x_int, y_int + radius//2)  # Vertical line
+        
         painter.end()
 
     def xy_to_draw(self, x, y, mirror):
@@ -128,10 +156,32 @@ class PCBPainter(Widgets.QDialog):
     
 
     def reload_base(self):
-        self.base = QtGui.QImage(self.image_path)
+        # Load original image for coordinate calculations
+        self.original_base = QtGui.QImage(self.image_path)
+        # Convert to RGB32 format if it's an indexed format to support QPainter operations
+        if self.original_base.format() == QtGui.QImage.Format_Indexed8 or self.original_base.format() == QtGui.QImage.Format_Mono:
+            self.original_base = self.original_base.convertToFormat(QtGui.QImage.Format_RGB32)
+        
+        # Create working copy for drawing markers
+        self.base = self.original_base.copy()
+        
+        # Calculate display scale to fit within reasonable window size
+        max_display_width = 800
+        max_display_height = 600
+        
+        scale_x = max_display_width / self.original_base.width()
+        scale_y = max_display_height / self.original_base.height()
+        self.display_scale = min(scale_x, scale_y, 1.0)  # Don't upscale, only downscale
 
     def redraw(self):
-        self.imglabel.setPixmap(QtGui.QPixmap.fromImage(self.base))
+        # Scale image for display while keeping original for coordinates
+        if self.display_scale < 1.0:
+            display_width = int(self.base.width() * self.display_scale)
+            display_height = int(self.base.height() * self.display_scale)
+            scaled_image = self.base.scaled(display_width, display_height, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.imglabel.setPixmap(QtGui.QPixmap.fromImage(scaled_image))
+        else:
+            self.imglabel.setPixmap(QtGui.QPixmap.fromImage(self.base))
     
     def configure_pcb_dimensions(self, height, width):
         self.pcbwidth.setValue(width)
@@ -187,7 +237,7 @@ class MeatBagCSVSettingsAltium(MeatBagCSVSettings):
 
 class MeatBagCSVSettingsKicadSingleLayer(MeatBagCSVSettings):
     def __init__(self):
-        super(MeatBagCSVSettings, self).__init__()
+        super(MeatBagCSVSettingsKicadSingleLayer, self).__init__()
         #Default kicad .pos file layout: Ref,Val,Package,PosX,PosY,Rot,Side,
         # e.g. "C1","100n","C_0805_2012Metric",94.500000,-65.500000,90.000000,top
 
@@ -256,6 +306,7 @@ class MeatBagWindow(Widgets.QMainWindow):
         self.timerScanLineEdit.timeout.connect(self.scanline_changed_dly)
 
         self.build_side = 0
+        self.all_components_data = []  # Store all component data for filtering
 
         self.cur_placement = None
         self.drawing_all_same_value = False
@@ -389,11 +440,44 @@ class MeatBagWindow(Widgets.QMainWindow):
     def sideSelectionChanged(self, indx):
         """User changed build side"""
         self.build_side = indx
-        self.recolourTable()
+        # Update table to show only components for the selected side
+        self.update_table_for_selected_side()
+
+    def highlight_component_at_row(self, row):
+        """Directly highlight the component at the specified table row"""
+        try:
+            # Get the component reference (designator)
+            ref = self.table.item(row, self.csv_settings.col_des).text()
+            
+            # Get coordinates
+            x = float(self.table.item(row, self.csv_settings.col_x).text())
+            y = float(self.table.item(row, self.csv_settings.col_y).text())
+            
+            # Determine if it's a top or bottom layer component
+            is_bottom = not self.isTopLayer(row)
+            
+            # Update the current placement display
+            self.place.setText(ref)
+            
+            # Draw the marker
+            self.pcbpainter.xy_to_draw(x, y, is_bottom)
+            
+            print(f"Highlighting {ref} at ({x}, {y})")
+            
+        except (ValueError, AttributeError) as e:
+            print(f"Error highlighting component at row {row}: {e}")
 
     def table_cellClicked(self, row, col):
         """User click on a cell"""
-
+        
+        # Skip header rows
+        if row < self.csv_settings.row_start:
+            return
+        
+        # For direct reference highlighting, highlight the clicked component immediately
+        self.highlight_component_at_row(row)
+        
+        # Also try the original part number matching for compatibility
         pn = self.table.item(row, self.csv_settings.col_pn).text()
         com = self.table.item(row, self.csv_settings.col_com).text()
         
@@ -414,6 +498,46 @@ class MeatBagWindow(Widgets.QMainWindow):
         
         return self.parseCSVFile(filename)
 
+    def group_components_by_value(self, ppdata):
+        """Group components by their values for intuitive placement workflow"""
+        if not ppdata or len(ppdata) == 0:
+            return ppdata
+            
+        # Keep header row separate
+        header_row = ppdata[0]
+        data_rows = ppdata[1:] if len(ppdata) > 1 else []
+        
+        # Group components by value (column 1 in KiCad format)
+        value_groups = {}
+        
+        for row in data_rows:
+            if len(row) <= self.csv_settings.col_com:
+                continue
+                
+            value = row[self.csv_settings.col_com]  # Component value (like "0.1uF", "10k")
+            layer = row[self.csv_settings.col_layer] if self.csv_settings.col_layer >= 0 else "top"
+            
+            # Create a key combining value and layer for better organization
+            key = f"{value}_{layer}"
+            
+            if key not in value_groups:
+                value_groups[key] = []
+            value_groups[key].append(row)
+        
+        # Sort groups by value name for consistent ordering
+        sorted_groups = sorted(value_groups.items())
+        
+        # Rebuild the data with header first, then grouped components
+        grouped_data = [header_row]
+        
+        for group_key, components in sorted_groups:
+            # Sort components within each group by designator
+            components.sort(key=lambda x: x[self.csv_settings.col_des] if len(x) > self.csv_settings.col_des else "")
+            grouped_data.extend(components)
+        
+        print(f"Grouped {len(data_rows)} components into {len(value_groups)} groups")
+        return grouped_data
+
     def parseCSVFile(self, filename):
         ppdata = []
         
@@ -425,15 +549,45 @@ class MeatBagWindow(Widgets.QMainWindow):
                 else:
                     ppdata.append(row)
 
+        # Store all component data for filtering
+        self.all_components_data = self.group_components_by_value(ppdata)
+        
+        # Display components based on current side selection
+        self.update_table_for_selected_side()
+
+    def update_table_for_selected_side(self):
+        """Update table to show only components for the selected side"""
+        if not self.all_components_data:
+            return
+            
+        # Filter components based on selected side
+        filtered_data = []
+        header_row = self.all_components_data[0]  # Always include header
+        filtered_data.append(header_row)
+        
+        # Determine which side to show (0 = top, 1 = bottom)
+        target_side = "top" if self.build_side == 0 else "bottom"
+        
+        for row in self.all_components_data[1:]:  # Skip header row
+            if len(row) > self.csv_settings.col_layer and self.csv_settings.col_layer >= 0:
+                layer = row[self.csv_settings.col_layer].lower()
+                if layer.startswith(target_side[:3]):  # "top" or "bot"
+                    filtered_data.append(row)
+            elif self.csv_settings.col_layer < 0:  # No layer column, assume top
+                if target_side == "top":
+                    filtered_data.append(row)
+        
+        # Update table with filtered data
         self.table.clear()
-        numRows = len(ppdata)
-        numCols = len(ppdata[0]) + 1
+        numRows = len(filtered_data)
+        numCols = len(header_row) + 1
         self.table.setRowCount(numRows)
         self.table.setColumnCount(numCols)
+        
         for r in range(0, numRows):
             for c in range(0, numCols - 1):
                 try:
-                    self.table.setItem(r, c, Widgets.QTableWidgetItem(ppdata[r][c]))
+                    self.table.setItem(r, c, Widgets.QTableWidgetItem(filtered_data[r][c]))
                 except IndexError:
                     self.table.setItem(r, c, Widgets.QTableWidgetItem("???"))
 
@@ -441,17 +595,26 @@ class MeatBagWindow(Widgets.QMainWindow):
             checkitem.setCheckState(QtCore.Qt.Unchecked)
             self.table.setItem(r, numCols-1, checkitem)
 
-        self.recolourTable()
-
-        #Rebuild local database of part numbers to speed up search
+        # Rebuild local database for filtered data
         self.pdb = []
         for r in range(0, numRows):
-            self.pdb.append(ppdata[r][self.csv_settings.col_pn])
+            if r < len(filtered_data) and len(filtered_data[r]) > self.csv_settings.col_pn:
+                self.pdb.append(filtered_data[r][self.csv_settings.col_pn])
+            else:
+                self.pdb.append("")
 
         self.pdc = []
         for r in range(0, numRows):
-            self.pdc.append(ppdata[r][self.csv_settings.col_com])
-
+            if r < len(filtered_data) and len(filtered_data[r]) > self.csv_settings.col_com:
+                self.pdc.append(filtered_data[r][self.csv_settings.col_com])
+            else:
+                self.pdc.append("")
+        
+        side_name = "TOP" if self.build_side == 0 else "BOTTOM"
+        component_count = numRows - 1  # Subtract header row
+        print(f"Showing {component_count} {side_name} side components")
+        
+        self.recolourTable()
 
     def recolourTable(self):
         """Redo the table colour stuff"""
