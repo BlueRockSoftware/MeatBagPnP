@@ -96,11 +96,24 @@ class PCBPainter(Widgets.QDialog):
 
         try:
             # Use original image dimensions for accurate coordinate calculations
-            scale_x = float(self.original_base.width()) / float(boardwidth)
-            scale_y = float(self.original_base.height()) / float(boardheight)
+            img_width = self.original_base.width() if self.original_base else 0
+            img_height = self.original_base.height() if self.original_base else 0
+            
+            if img_width == 0 or img_height == 0:
+                error_msg = f"Invalid image dimensions ({img_width}x{img_height}). Please load a valid image first."
+                Widgets.QMessageBox.warning(self, "Invalid Image", error_msg)
+                return
+                
+            if boardwidth == 0 or boardheight == 0:
+                error_msg = f"Invalid board dimensions ({boardwidth}x{boardheight}). Please set board width and height."
+                Widgets.QMessageBox.warning(self, "Invalid Board Dimensions", error_msg)
+                return
+                
+            scale_x = float(img_width) / float(boardwidth)
+            scale_y = float(img_height) / float(boardheight)
         except ZeroDivisionError:
             Widgets.QMessageBox.warning(self, "Division by Zero", "Division by zero - did you set board height & width in image?")
-            raise
+            return
 
         x = x * scale_x
         y = y * scale_y
@@ -158,6 +171,17 @@ class PCBPainter(Widgets.QDialog):
     def reload_base(self):
         # Load original image for coordinate calculations
         self.original_base = QtGui.QImage(self.image_path)
+        
+        # Check if image loaded successfully
+        if self.original_base.isNull() or self.original_base.width() == 0 or self.original_base.height() == 0:
+            error_msg = f"Failed to load image: {self.image_path}\n\nPlease check:\n1. File exists\n2. File path is correct\n3. Image format is supported (PNG, JPG, etc.)"
+            Widgets.QMessageBox.critical(self, "Image Load Error", error_msg)
+            # Create a dummy image to prevent crashes
+            self.original_base = QtGui.QImage(100, 100, QtGui.QImage.Format_RGB32)
+            self.original_base.fill(QtCore.Qt.lightGray)
+            print(f"ERROR: Could not load image from: {self.image_path}")
+            return
+        
         # Convert to RGB32 format if it's an indexed format to support QPainter operations
         if self.original_base.format() == QtGui.QImage.Format_Indexed8 or self.original_base.format() == QtGui.QImage.Format_Mono:
             self.original_base = self.original_base.convertToFormat(QtGui.QImage.Format_RGB32)
@@ -169,9 +193,20 @@ class PCBPainter(Widgets.QDialog):
         max_display_width = 800
         max_display_height = 600
         
-        scale_x = max_display_width / self.original_base.width()
-        scale_y = max_display_height / self.original_base.height()
-        self.display_scale = min(scale_x, scale_y, 1.0)  # Don't upscale, only downscale
+        # Ensure we have valid dimensions before calculating scale
+        img_width = self.original_base.width()
+        img_height = self.original_base.height()
+        
+        if img_width > 0 and img_height > 0:
+            scale_x = max_display_width / img_width
+            scale_y = max_display_height / img_height
+            self.display_scale = min(scale_x, scale_y, 1.0)  # Don't upscale, only downscale
+        else:
+            # Fallback if dimensions are invalid
+            self.display_scale = 1.0
+            print(f"WARNING: Invalid image dimensions ({img_width}x{img_height}), using scale 1.0")
+        
+        print(f"Successfully loaded image: {self.image_path} ({self.original_base.width()}x{self.original_base.height()})")
 
     def redraw(self):
         # Scale image for display while keeping original for coordinates
@@ -190,6 +225,14 @@ class PCBPainter(Widgets.QDialog):
     def image_selected(self, filename):
         if filename:
             self.image_path = filename
+            print(f"Attempting to load image: {self.image_path}")
+            # Check if file exists before trying to load
+            import os
+            if not os.path.exists(self.image_path):
+                error_msg = f"Image file not found: {self.image_path}\n\nCurrent working directory: {os.getcwd()}"
+                print(f"ERROR: {error_msg}")
+                Widgets.QMessageBox.critical(self, "File Not Found", error_msg)
+                return
             self.reload_base()
             self.redraw()
 
